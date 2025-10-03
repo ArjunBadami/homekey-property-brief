@@ -4,3 +4,4 @@ sqlmodel
 pydantic-settings
 httpx
 python-multipart
+openai
