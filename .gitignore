@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.env.*
+# FastAPI/SQLite
+app.db
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+# Caches/coverage
+.pytest_cache/
+.coverage
+dist/
+build/
