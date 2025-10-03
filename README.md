@@ -1,57 +1,67 @@
 # Property Brief Aggregator
 
-A FastAPI application that aggregates property data from multiple sources (County, Listing, HOA) into a canonical brief with conflict resolution, provenance tracking, and user contributions.
+## Problem framing
 
-## Features
+Property information is often scattered across multiple sources, inconsistent across those sources, and incomplete. This feature aggregates data for a given address, reconciles conflicts into a canonical “Property Brief,” exposes provenance and disputes, and computes a completeness score so buyers see a clear and trustworthy snapshot.
 
-- **Multi-source data aggregation**: County assessor, real estate listings, and HOA data
-- **Address normalization**: Consistent lookup across sources
-- **Conflict resolution**: Priority-based merging with dispute detection
-- **Completeness scoring**: 0-100 score based on available fields
-- **User contributions**: Allow users to propose fixes/corrections
-- **AI summaries**: OpenAI integration with rule-based fallback
-- **Provenance tracking**: Know which source provided each data point
+## Architecture overview
 
-## API Endpoints
+- **Sources (scattered):** Pluggable adapters (e.g., county, listing, hoa) fetch raw payloads. Raw responses are stored as `SourceDatum` with `source_name` and `fetched_at` for audit and refresh.
+- **Merge (inconsistent):** A central merge policy produces a canonical brief per field using:
+  - Freshness wins (newest `fetched_at`).
+  - If tie, source priority: county > listing > hoa.
+  - Material variance thresholds flag disputes (e.g., square_feet delta > 5%).
+  - Per-field **provenance** records the chosen source and all candidates.
+- **Completeness (incomplete):** Weighted scoring across core fields. Missing fields and disputes reduce the score and are surfaced as flags.
 
-### Property Ingestion
-- `POST /properties/ingest` - Ingest property data from all sources
+## Data model (simplified)
 
-### Data Retrieval
-- `GET /properties/{id}/sources` - Get all source data for a property
-- `GET /properties/{id}/brief` - Get the merged property brief
-- `GET /properties/{id}/contributions` - Get user contributions
+- `Property`: id, normalized_address, display_address, created_at.
+- `SourceDatum`: property_id, source_name, fetched_at, payload (JSON).
+- `Brief`: property_id, brief JSON (canonical fields + provenance + flags), completeness, generated_at.
+- `Contribution`: property_id, field, proposed_value, reason, contributor, created_at.
 
-### User Contributions
-- `POST /properties/{id}/contributions` - Submit a proposed correction
+## Endpoints
 
-### AI Features
-- `POST /properties/{id}/ai_summary` - Generate AI summary (requires OPENAI_API_KEY)
+- `POST /properties/ingest`  
+  Body: `{ "address": "123 Main St, San Diego, CA" }`  
+  Action: Upsert property, fetch adapters, store `SourceDatum`, merge into `Brief`.  
+  Returns: `{ "id": <property_id>, "completeness": <0-100>, "flags_count": <int> }`
 
-## Setup
+- `GET /properties/{id}/sources`  
+  Returns raw source payloads and timestamps for transparency.
 
-1. Install dependencies:
+- `GET /properties/{id}/brief`  
+  Returns canonical brief JSON including `provenance`, `flags`, `missing`, and `completeness`.
+
+- `POST /properties/{id}/contributions`  
+  Body: `{ "field": "square_feet", "proposed_value": "2700", "reason": "recent renovation", "contributor": "name or email" }`  
+  Action: Records suggested correction or addition for human review.
+
+- `POST /properties/{id}/ai_summary` (optional)  
+  Uses the canonical brief to produce a buyer-friendly Markdown summary. Falls back to a rule-based summary if no API key.
+
+## Conflict resolution policy
+
+1. Freshness wins: the value from the most recent `fetched_at` takes precedence.  
+2. Tie-breaker: county > listing > hoa.  
+3. Dispute thresholds: for numeric fields like square_feet, a delta greater than 5% is flagged as `disputed` and all candidate values are included in provenance.
+
+## Completeness scoring
+
+Core fields (address, beds, baths, square_feet, price) contribute the majority of the score. Secondary fields (lot_size, year_built, taxes, hoa) contribute the remainder. Missing or disputed fields reduce the score. The score is returned with the brief so consumers can reason about data quality.
+
+## Running and demo
+
 ```bash
-pip install -r requirements.txt
+python -m venv .venv && source .venv/Scripts/activate
+python -m pip install -r requirements.txt
+python seed.py
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-2. Run the application:
-```bash
-uvicorn app.main:app --reload
-```
+Use the included test script to drive the demo end-to-end:
 
-3. Test the API:
-```bash
+```
 python test_property_brief.py
 ```
-
-## Mock Data
-
-The application includes mock data for these addresses:
-- `123 Main Street`
-- `456 Oak Avenue`
-- `789 Pine Drive`
-
-## Environment Variables
-
-- `OPENAI_API_KEY` - Optional, enables AI summaries via OpenAI API
