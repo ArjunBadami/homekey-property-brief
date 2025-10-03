@@ -10,7 +10,7 @@ from .deps import get_session, engine
 from .crud import (
     list_items, get_item, create_item, update_item, delete_item,
     get_property_by_address, create_or_update_property, get_property,
-    create_source_datum, get_source_data, create_or_update_brief, get_brief,
+    upsert_source_datum, get_source_data, create_or_update_brief, get_brief,
     create_contribution, get_contributions
 )
 from .utils import normalize_address, merge_source_data, calculate_completeness_score, call_llm_topics
@@ -92,8 +92,8 @@ def ingest_property(payload: PropertyCreate, session=Depends(get_session)):
         data = adapter_func(normalized_addr)
         if data:
             sources[source_name] = data
-            # Save source datum
-            create_source_datum(session, property.id, source_name, data)
+            # Upsert source datum (update if exists, create if not)
+            upsert_source_datum(session, property.id, source_name, data)
     
     # Merge data and create brief
     if sources:

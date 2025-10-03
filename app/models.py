@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Dict, Any
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
 import json
 
 class Item(SQLModel, table=True):
@@ -22,6 +22,8 @@ class Property(SQLModel, table=True):
     contributions: list["Contribution"] = Relationship(back_populates="property")
 
 class SourceDatum(SQLModel, table=True):
+    __tablename__ = "sourcedatum"
+    
     id: Optional[int] = Field(default=None, primary_key=True)
     property_id: int = Field(foreign_key="property.id")
     source_name: str  # "county", "listing", "hoa"
@@ -30,6 +32,11 @@ class SourceDatum(SQLModel, table=True):
     
     # Relationships
     property: Property = Relationship(back_populates="source_data")
+    
+    # Unique constraint to ensure only one row per (property_id, source_name)
+    __table_args__ = (
+        UniqueConstraint("property_id", "source_name", name="uq_property_source"),
+    )
 
 class Brief(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

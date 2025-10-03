@@ -66,19 +66,60 @@ def get_property(session, property_id: int) -> Optional[Property]:
     return session.get(Property, property_id)
 
 # SourceDatum CRUD operations
-def create_source_datum(session, property_id: int, source_name: str, data: Dict[str, Any]) -> SourceDatum:
-    source_datum = SourceDatum(
-        property_id=property_id,
-        source_name=source_name,
-        data=json.dumps(data)
+def upsert_source_datum(session, property_id: int, source_name: str, data: Dict[str, Any]) -> SourceDatum:
+    """Upsert source datum - update if exists, create if not."""
+    stmt = select(SourceDatum).where(
+        SourceDatum.property_id == property_id,
+        SourceDatum.source_name == source_name
     )
-    session.add(source_datum)
-    session.commit()
-    session.refresh(source_datum)
-    return source_datum
+    existing = session.exec(stmt).first()
+    
+    if existing:
+        # Update existing record
+        existing.data = json.dumps(data)
+        existing.created_at = now_utc()
+        session.add(existing)
+        session.commit()
+        session.refresh(existing)
+        return existing
+    else:
+        # Create new record
+        source_datum = SourceDatum(
+            property_id=property_id,
+            source_name=source_name,
+            data=json.dumps(data)
+        )
+        session.add(source_datum)
+        session.commit()
+        session.refresh(source_datum)
+        return source_datum
+
+def create_source_datum(session, property_id: int, source_name: str, data: Dict[str, Any]) -> SourceDatum:
+    """Legacy function - use upsert_source_datum instead."""
+    return upsert_source_datum(session, property_id, source_name, data)
 
 def get_source_data(session, property_id: int) -> List[SourceDatum]:
-    stmt = select(SourceDatum).where(SourceDatum.property_id == property_id)
+    """Get the latest source data for each source for a property."""
+    from sqlalchemy import func
+    
+    # Subquery to get the latest created_at for each source_name
+    latest_subquery = (
+        select(SourceDatum.source_name, func.max(SourceDatum.created_at).label('latest_created'))
+        .where(SourceDatum.property_id == property_id)
+        .group_by(SourceDatum.source_name)
+        .subquery()
+    )
+    
+    # Main query to get the latest record for each source
+    stmt = (
+        select(SourceDatum)
+        .join(latest_subquery, 
+              (SourceDatum.source_name == latest_subquery.c.source_name) &
+              (SourceDatum.created_at == latest_subquery.c.latest_created))
+        .where(SourceDatum.property_id == property_id)
+        .order_by(SourceDatum.source_name)
+    )
+    
     return session.exec(stmt).all()
 
 # Brief CRUD operations
