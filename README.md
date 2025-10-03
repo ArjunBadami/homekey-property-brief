@@ -56,7 +56,6 @@ Core fields (address, beds, baths, square_feet, price) contribute the majority o
 ```bash
 python -m venv .venv && source .venv/Scripts/activate
 python -m pip install -r requirements.txt
-python seed.py
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -65,3 +64,16 @@ Use the included test script to drive the demo end-to-end:
 ```
 python test_property_brief.py
 ```
+
+## Environment Variables
+
+Create a `.env` file in the project root with the following variables:
+
+```bash
+# OpenAI API Key for AI summaries
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+- `OPENAI_API_KEY` - Required for AI summaries via OpenAI API. If not provided, the system will fall back to rule-based summaries.
+
+**Note**: The `.env` file is already included in `.gitignore` to keep your API keys secure.

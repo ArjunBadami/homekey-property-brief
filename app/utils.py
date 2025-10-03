@@ -1,4 +1,5 @@
 import re
+import requests
 from datetime import datetime, timezone
 from typing import Dict, Any
 
@@ -133,3 +134,72 @@ def calculate_completeness_score(brief_data: Dict[str, Any]) -> int:
     # Core fields are worth 15 points each (75 total), optional fields 5 points each (25 total)
     score = (available_core * 15) + (available_optional * 5)
     return min(score, 100)
+
+def budget(messages, want_max_tokens=2500):
+    """Calculate max_tokens based on message content length"""
+    # Simple token estimation: ~4 characters per token
+    total_chars = sum(len(msg.get('content', '')) for msg in messages)
+    estimated_tokens = total_chars // 4
+    
+    # Return the smaller of estimated tokens or desired max tokens
+    return min(estimated_tokens, want_max_tokens)
+
+def call_llm_topics(prompt: str) -> str:
+    from .config import settings
+    
+    if not settings.OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY environment variable is not set")
+    
+    OPENAI_API_HEADERS = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"}
+
+    messages = [
+        {"role":"system","content":"You are a helpful real estate property brief summarizer, which takes in the property brief json (which is aggregation of several sources: hoa, listing, county data), and generates a brief for potential buyers. Also included are some contributions of the property which have been added by other users who have seen the property, so in your output, mention these contributions with a grain of salt, especially if they are negative."},
+        {"role":"user","content": prompt}
+    ]
+    max_tokens = budget(messages, want_max_tokens=2500)
+
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": messages,
+        "temperature": 0.15,
+        "top_p": 0.9,
+        "max_tokens": max_tokens
+    }
+    
+    try:
+        print(f"Making OpenAI API call with {max_tokens} max tokens...")
+        r = requests.post("https://api.openai.com/v1/chat/completions", json=body, headers=OPENAI_API_HEADERS, timeout=60)
+        
+        print(f"Response status: {r.status_code}")
+        
+        if r.status_code != 200:
+            print(f"Error response text: {r.text}")
+            r.raise_for_status()
+        
+        response_data = r.json()
+        print(f"Response keys: {list(response_data.keys())}")
+        
+        if "choices" not in response_data:
+            raise KeyError(f"'choices' not found in response. Available keys: {list(response_data.keys())}")
+        
+        if not response_data["choices"]:
+            raise KeyError("'choices' array is empty")
+        
+        choice = response_data["choices"][0]
+        if "message" not in choice:
+            raise KeyError(f"'message' not found in choice. Available keys: {list(choice.keys())}")
+        
+        if "content" not in choice["message"]:
+            raise KeyError(f"'content' not found in message. Available keys: {list(choice['message'].keys())}")
+        
+        return choice["message"]["content"]
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Request exception: {e}")
+        raise
+    except KeyError as e:
+        print(f"Key error: {e}")
+        raise
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise

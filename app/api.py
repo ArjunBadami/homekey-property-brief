@@ -13,7 +13,7 @@ from .crud import (
     create_source_datum, get_source_data, create_or_update_brief, get_brief,
     create_contribution, get_contributions
 )
-from .utils import normalize_address, merge_source_data, calculate_completeness_score
+from .utils import normalize_address, merge_source_data, calculate_completeness_score, call_llm_topics
 from .adapters.county import get_county_data
 from .adapters.listing import get_listing_data
 from .adapters.hoa import get_hoa_data
@@ -171,7 +171,7 @@ def get_ai_summary(
     payload: AISummaryRequest,
     session=Depends(get_session)
 ):
-    """Generate AI summary for property (OpenAI if key available, else rule-based)."""
+    """Generate AI summary for property using call_llm_topics function."""
     property = get_property(session, property_id)
     if not property:
         raise HTTPException(404, "Property not found")
@@ -182,43 +182,72 @@ def get_ai_summary(
     
     brief_data = json.loads(brief.data)
     
-    # Check for OpenAI API key
-    import os
-    openai_key = os.getenv("OPENAI_API_KEY")
+    # Get contributions for this property
+    contributions = get_contributions(session, property_id)
     
-    if openai_key:
-        # Use OpenAI for summary
-        try:
-            import openai
-            client = openai.OpenAI(api_key=openai_key)
-            
-            prompt = payload.prompt_override or f"""
-            Summarize this property data in 2-3 sentences:
-            Address: {brief_data.get('address', 'N/A')}
-            Square Feet: {brief_data.get('square_feet', 'N/A')}
-            Bedrooms: {brief_data.get('bedrooms', 'N/A')}
-            Bathrooms: {brief_data.get('bathrooms', 'N/A')}
-            Year Built: {brief_data.get('year_built', 'N/A')}
-            Property Type: {brief_data.get('property_type', 'N/A')}
-            """
-            
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=150
-            )
-            
-            return {
-                "summary": response.choices[0].message.content,
-                "source": "openai",
-                "completeness_score": brief.completeness_score
-            }
-            
-        except Exception as e:
-            # Fallback to rule-based
-            pass
+    # Build the prompt with brief data and contributions
+    prompt_parts = ["Property Brief Data:"]
+    prompt_parts.append(json.dumps(brief_data, indent=2))
     
-    # Rule-based fallback
+    if contributions:
+        prompt_parts.append("\nUser Contributions:")
+        for contrib in contributions:
+            prompt_parts.append(f"- Field: {contrib.field}, Proposed Value: {contrib.proposed_value}, Reason: {contrib.reason}, Contributor: {contrib.contributor}")
+    
+    prompt = payload.prompt_override or "\n".join(prompt_parts)
+    
+    try:
+        # Use the call_llm_topics function
+        summary = call_llm_topics(prompt)
+        
+        return {
+            "summary": summary,
+            "source": "openai",
+            "completeness_score": brief.completeness_score
+        }
+        
+    except requests.exceptions.RequestException as e:
+        # Network/HTTP related errors
+        error_details = {
+            "error_type": "request_exception",
+            "error_message": str(e),
+            "status_code": getattr(e.response, 'status_code', None) if hasattr(e, 'response') else None,
+            "response_text": getattr(e.response, 'text', None) if hasattr(e, 'response') else None
+        }
+        
+        return _generate_fallback_summary(brief_data, contributions, error_details)
+        
+    except KeyError as e:
+        # Missing key in response
+        error_details = {
+            "error_type": "key_error",
+            "error_message": f"Missing key in OpenAI response: {str(e)}",
+            "expected_keys": ["choices", "message", "content"]
+        }
+        
+        return _generate_fallback_summary(brief_data, contributions, error_details)
+        
+    except json.JSONDecodeError as e:
+        # JSON parsing error
+        error_details = {
+            "error_type": "json_decode_error",
+            "error_message": f"Failed to parse OpenAI response JSON: {str(e)}"
+        }
+        
+        return _generate_fallback_summary(brief_data, contributions, error_details)
+        
+    except Exception as e:
+        # Any other unexpected errors
+        error_details = {
+            "error_type": "unexpected_error",
+            "error_message": str(e),
+            "error_class": type(e).__name__
+        }
+        
+        return _generate_fallback_summary(brief_data, contributions, error_details)
+
+def _generate_fallback_summary(brief_data: dict, contributions: list, error_details: dict) -> dict:
+    """Generate rule-based fallback summary with error details"""
     summary_parts = []
     
     if brief_data.get('address'):
@@ -233,10 +262,16 @@ def get_ai_summary(
     if brief_data.get('hoa_fee'):
         summary_parts.append(f"with ${brief_data['hoa_fee']} monthly HOA fee")
     
+    # Add contributions if any
+    if contributions:
+        contrib_text = "User contributions: " + ", ".join([f"{c.field}={c.proposed_value}" for c in contributions])
+        summary_parts.append(contrib_text)
+    
     summary = ". ".join(summary_parts) + "."
     
     return {
         "summary": summary,
-        "source": "rule_based",
+        "source": "rule_based_fallback",
+        "error_details": error_details,
         "completeness_score": brief.completeness_score
     }
